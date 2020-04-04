@@ -1,0 +1,10 @@
+dash
+dash_core_components
+dash_html_components
+dateutil
+google
+googleapiclient
+google_auth_oauthlib
+numpy
+pandas==0.25.3
+plotly==4.6.0
