@@ -1,7 +1,6 @@
 dash
 dash_core_components
 dash_html_components
-dateutil
 google
 googleapiclient
 google_auth_oauthlib

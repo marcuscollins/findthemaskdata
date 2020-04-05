@@ -271,39 +271,77 @@ def cumulative_needs(input_data: pd.DataFrame, column: str = NEED, values=None, 
         values = list(input_data.groupby('deduped_need').size().sort_values(ascending=False).head(top_n).index)
     data = input_data.sort_values('timestamp').copy()
     data = data[data[NEED].isin(values)]
+    cumul_data = data.copy()
     for v in values:
-        data[v] = data[NEED].apply(lambda x: x == v).astype(int).cumsum()
+        cumul_data[v] = cumul_data[NEED].apply(lambda x: x == v).astype(int).cumsum()
+        data[v] = data[NEED].apply(lambda x: x == v).astype(int)
+    cumul_data = cumul_data[['timestamp'] + values].sort_values('timestamp').dropna()
     data = data[['timestamp'] + values].sort_values('timestamp').dropna()
+    return data, cumul_data, values
+
+
+def time_bin_data(input_data: pd.DataFrame, time_bin_size='6H', columns=None):
+    tmp = input_data.copy()
+    if columns is None:
+        columns = [c for c in tmp.columns if c != 'timestamp']
+    agg_funcs = {c: 'sum' for c in columns}
+    out1 = tmp.groupby('timestamp').agg(agg_funcs)
+    out1['new_timestamp'] = out1.index.round(time_bin_size)
+    out2 = out1.groupby('new_timestamp').agg(agg_funcs).reset_index().rename(columns={'new_timestamp': 'timestamp'})
+    return out2
+
+
+def tidy(input_data: pd.DataFrame):
     # Hadley whats-his-face can die in a fire. I hate the tidy-verse. But to use plotly, we must do this...
-    return data.melt(id_vars=['timestamp']).drop_duplicates()
+    data = input_data.copy().melt(id_vars=['timestamp']).drop_duplicates()
+    data = data[data['value'] != 0]
+    return data
 
 
 latest_data = gyet_it()
 df = clean_it(latest_data)
 dfe = explode_accepting(df)
-cum_needs = cumulative_needs(dfe, column='deduped_need', top_n=10)
+needs, cum_needs, ppe_types = cumulative_needs(dfe, column='deduped_need', top_n=10)
 log_unclassified_items(dfe)
 
 app = dash.Dash(__name__)
 server = app.server
-# team_names = data.group.unique()
-# team_names.sort()
-app.layout = html.Div()
+ppe_types.sort()
 
-# TODO: need to do layout, would be nice to have checkboxes to select categories. For now, use top 10.
-'''[
-    html.Div([dcc.Dropdown(id='group-select', options=[{'label': i, 'value': i} for i in team_names],
-                           value='TOR', style={'width': '140px'})]),
-    dcc.Graph('shot-dist-graph', config={'displayModeBar': False})])'''
+app.layout = html.Div([
+    html.Div([
+        dcc.Checklist(id='cumul-select', options=[{'label': 'cumulative', 'value': 'cumulative'}],
+                            value=['cumulative'], labelStyle={'display': 'inline-block'}),
+        dcc.Dropdown(id='time-bin-select',
+                     options=[{'label': k, 'value': k} for k in ['1H', '3H', '6H', '12H', '24H']],
+                     value='6H', style={'width': '200px'}),
+        html.I(" Time binning is for non-cumulative plots only")
+        ]),
+    html.Div([dcc.Checklist(id='ppe-type-select',
+                            options=[{'label': i, 'value': i} for i in ppe_types],
+                            value=ppe_types, labelStyle={'display': 'inline-block'})]),
+    # TODO: use dcc.Loading to add a spinner while the graph loads.
+    dcc.Graph('top10-ppe-graph', config={'displayModeBar': False})
+    ])
 
 
 @app.callback(
-        Output('shot-dist-graph', 'figure'),
-        [Input('group-select', 'value')]
+        Output('top10-ppe-graph', 'figure'),
+        [Input('ppe-type-select', 'value'), Input('cumul-select', 'value'), Input('time-bin-select', 'value')]
         )
-def update_needs_graph():
+def update_needs_graph(var_selections, cumulative, time_bin):
     import plotly.express as px
-    return px.line(cum_needs, x='timestamp', y='value', line_group='variable', color='variable')
+    try:
+        if cumulative == ['cumulative', ]:
+            display_data = cum_needs.copy()
+        else:
+            display_data = time_bin_data(needs, time_bin_size=time_bin).copy()
+        display_data = tidy(display_data)
+        return px.line(display_data[display_data["variable"].isin(var_selections)],
+                       x='timestamp', y='value', line_group='variable', color='variable')
+    except KeyError as e:
+        print(f"Available keys are: {cum_needs.columns}")
+        raise e
 
 
 if __name__ == '__main__':
